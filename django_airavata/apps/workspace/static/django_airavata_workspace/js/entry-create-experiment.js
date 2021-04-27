@@ -1,7 +1,8 @@
 import { components, entry } from "django-airavata-common-ui";
 import CreateExperimentContainer from "./containers/CreateExperimentContainer.vue";
+import "../../scss/styles.scss";
 
-entry(Vue => {
+entry((Vue) => {
   new Vue({
     render(h) {
       return h(components.MainLayout, [
@@ -9,15 +10,15 @@ entry(Vue => {
           props: {
             appModuleId: this.appModuleId,
             userInputValues: this.userInputValues,
-            experimentDataDir: this.experimentDataDir
-          }
-        })
+            experimentDataDir: this.experimentDataDir,
+          },
+        }),
       ]);
     },
     data() {
       return {
         appModuleId: null,
-        userInputValues: null
+        userInputValues: null,
       };
     },
     beforeMount() {
@@ -30,6 +31,6 @@ entry(Vue => {
       if (this.$el.dataset.experimentDataDir) {
         this.experimentDataDir = this.$el.dataset.experimentDataDir;
       }
-    }
+    },
   }).$mount("#create-experiment");
 });

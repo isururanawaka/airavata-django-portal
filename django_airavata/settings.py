@@ -74,6 +74,9 @@ INSTALLED_APPS = [
 
     # django-webpack-loader
     'webpack_loader',
+
+    # Airavata Django Portal SDK
+    'airavata_django_portal_sdk',
 ]
 
 # List of app labels for Airavata apps that should be hidden from menus
@@ -97,7 +100,8 @@ CUSTOM_DJANGO_APPS = []
 #
 for entry_point in iter_entry_points(group='airavata.djangoapp'):
     custom_app_class = entry_point.load()
-    custom_app_instance = custom_app_class(entry_point.name, import_module(entry_point.module_name))
+    custom_app_instance = custom_app_class(
+        entry_point.name, import_module(entry_point.module_name))
     CUSTOM_DJANGO_APPS.append(custom_app_instance)
     # Create path to AppConfig class (otherwise the ready() method doesn't get
     # called)
@@ -210,6 +214,7 @@ MEDIA_URL = '/media/'
 
 # Data storage
 FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o777
+FILE_UPLOAD_PERMISSIONS = 0o644
 FILE_UPLOAD_MAX_FILE_SIZE = 64 * 1024 * 1024  # 64 MB
 FILE_UPLOAD_HANDLERS = [
     'django.core.files.uploadhandler.MemoryFileUploadHandler',
@@ -230,6 +235,7 @@ PGA_URL = None
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework.authentication.SessionAuthentication',
+        'django_airavata.apps.api.authentication.OAuthAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
@@ -251,6 +257,9 @@ WAGTAIL_SITE_NAME = 'Django Airavata Portal'
 
 WAGTAILIMAGES_JPEG_QUALITY = 100
 
+# For some long wagtail pages, the number of POST parameters exceeds 1000,
+# which is the default for DATA_UPLOAD_MAX_NUMBER_FIELDS
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
 
 LOGIN_URL = 'django_airavata_auth:login'
 LOGIN_REDIRECT_URL = 'django_airavata_workspace:dashboard'
@@ -290,6 +299,7 @@ WEBPACK_LOADER = {
             'common',
             'dist',
             'webpack-stats.json'),
+        'TIMEOUT': 60,
     },
     'ADMIN': {
         'BUNDLE_DIR_NAME': 'django_airavata_admin/dist/',
@@ -302,6 +312,7 @@ WEBPACK_LOADER = {
             'django_airavata_admin',
             'dist',
             'webpack-stats.json'),
+        'TIMEOUT': 60,
     },
     'DATAPARSERS': {
         'BUNDLE_DIR_NAME': 'django_airavata_dataparsers/dist/',
@@ -314,6 +325,7 @@ WEBPACK_LOADER = {
             'django_airavata_dataparsers',
             'dist',
             'webpack-stats.json'),
+        'TIMEOUT': 60,
     },
     'GROUPS': {
         'BUNDLE_DIR_NAME': 'django_airavata_groups/dist/',
@@ -326,6 +338,7 @@ WEBPACK_LOADER = {
             'django_airavata_groups',
             'dist',
             'webpack-stats.json'),
+        'TIMEOUT': 60,
     },
     'WORKSPACE': {
         'BUNDLE_DIR_NAME': 'django_airavata_workspace/dist/',
@@ -338,6 +351,7 @@ WEBPACK_LOADER = {
             'django_airavata_workspace',
             'dist',
             'webpack-stats.json'),
+        'TIMEOUT': 60,
     },
 }
 
@@ -384,7 +398,7 @@ LOGGING = {
             'level': 'DEBUG'
         },
         'root': {
-            'handlers': ['console'],
+            'handlers': ['console', 'console_debug'],
             'level': 'WARNING'
         }
     },

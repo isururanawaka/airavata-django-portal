@@ -13,22 +13,22 @@
 
 <script>
 import { models } from "django-airavata-api";
-import { components } from "django-airavata-common-ui";
+import DataProductViewer from "django-airavata-common-ui/js/components/DataProductViewer.vue";
 
 export default {
   name: "default-output-viewer",
   props: {
     experimentOutput: {
       type: models.OutputDataObjectType,
-      required: true
+      required: true,
     },
     dataProducts: {
       type: Array,
-      required: true
-    }
+      required: true,
+    },
   },
   components: {
-    "data-product-viewer": components.DataProductViewer
+    DataProductViewer,
   },
   computed: {
     fileMimeType() {
@@ -42,8 +42,8 @@ export default {
       } else {
         return null;
       }
-    }
-  }
+    },
+  },
 };
 </script>
 <style scoped>

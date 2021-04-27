@@ -1,33 +1,20 @@
 <template>
   <div class="file-input-editor">
-    <div
-      class="d-flex"
-      v-if="isDataProductURI && dataProduct"
-    >
-      <data-product-viewer
+    <div class="d-flex" v-if="isDataProductURI && dataProduct">
+      <user-storage-link
         class="mr-auto"
-        :data-product="dataProduct"
-        :input-file="true"
-        :open-in-new-window="true"
+        :data-product-uri="dataProduct.productUri"
+        :mime-type="dataProduct.mimeType"
+        :file-name="dataProduct.productName"
       />
-      <b-link @click="viewFile" v-if="isViewable">
-        View File <i class="fa fa-eye"></i>
-        <span class="sr-only">View file</span>
-      </b-link>
-      <b-modal
-        :title="dataProduct.productName"
-        ref="modal"
-        ok-only
-        scrollable
-      >
-        <pre>{{ fileContent }}</pre>
-      </b-modal>
       <delete-link
         v-if="!readOnly && dataProduct.isInputFileUpload"
         class="ml-2"
         @delete="deleteDataProduct"
       >
-        Are you sure you want to delete input file <strong>{{ dataProduct.productName }}</strong>?
+        Are you sure you want to delete input file
+        <strong>{{ dataProduct.productName }}</strong
+        >?
       </delete-link>
       <b-link
         v-else-if="!readOnly"
@@ -35,10 +22,7 @@
         class="ml-2 text-secondary"
       >
         Unselect
-        <i
-          class="fa fa-times"
-          aria-hidden="true"
-        ></i>
+        <i class="fa fa-times" aria-hidden="true"></i>
       </b-link>
     </div>
     <input-file-selector
@@ -52,16 +36,17 @@
 </template>
 
 <script>
-import { models, services, utils } from "django-airavata-api";
-import { InputEditorMixin } from "django-airavata-workspace-plugin-api";
-import { components } from "django-airavata-common-ui";
+import {models, services, utils} from "django-airavata-api";
+import {InputEditorMixin} from "django-airavata-workspace-plugin-api";
+import {components} from "django-airavata-common-ui";
 import InputFileSelector from "./InputFileSelector";
+import UserStorageLink from "../../storage/storage-edit/UserStorageLink";
 
 export default {
   name: "file-input-editor",
   mixins: [InputEditorMixin],
   components: {
-    "data-product-viewer": components.DataProductViewer,
+    UserStorageLink,
     "delete-link": components.DeleteLink,
     InputFileSelector
   },
@@ -89,13 +74,13 @@ export default {
     },
     isViewable() {
       return this.dataProduct.isText;
-    }
+    },
   },
   data() {
     return {
       dataProduct: null,
       fileContent: null,
-      uploading: false
+      uploading: false,
     };
   },
   created() {
@@ -105,24 +90,24 @@ export default {
   },
   methods: {
     loadDataProduct(dataProductURI) {
-      services.DataProductService.retrieve({ lookup: dataProductURI }).then(
-        dataProduct => (this.dataProduct = dataProduct)
-      ).catch(() => {
-        // If we're unable to load data product, reset data to null
-        this.data = null;
-        this.valueChanged();
-      });
+      services.DataProductService.retrieve({lookup: dataProductURI})
+        .then((dataProduct) => (this.dataProduct = dataProduct))
+        .catch(() => {
+          // If we're unable to load data product, reset data to null
+          this.data = null;
+          this.valueChanged();
+        });
     },
     deleteDataProduct() {
       utils.FetchUtils.delete(
         "/api/delete-file?data-product-uri=" + encodeURIComponent(this.value),
-        { ignoreErrors: true }
+        {ignoreErrors: true}
       )
         .then(() => {
           this.data = null;
           this.valueChanged();
         })
-        .catch(err => {
+        .catch((err) => {
           // Ignore 404 Not Found errors, file no longer exists so assume was
           // already deleted
           if (err.details.status === 404) {
@@ -147,17 +132,6 @@ export default {
       }
       this.valueChanged();
     },
-    viewFile() {
-      this.fileContent = null;
-      fetch(this.dataProduct.downloadURL, {
-        credentials: "same-origin"
-      })
-        .then(result => result.text())
-        .then(text => {
-          this.fileContent = text;
-          this.$refs.modal.show();
-        });
-    },
     uploadStart() {
       this.uploading = true;
       this.$emit("uploadstart");
@@ -165,8 +139,8 @@ export default {
     uploadEnd() {
       this.uploading = false;
       this.$emit("uploadend");
-    }
-  }
+    },
+  },
 };
 </script>
 
