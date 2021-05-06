@@ -5,6 +5,7 @@ from datetime import datetime
 import pytz
 from django.conf import settings
 from django.http import Http404
+from django.http.request import QueryDict
 from rest_framework import mixins, pagination, permissions
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
@@ -33,7 +34,14 @@ class GenericAPIBackedViewSet(GenericViewSet):
         raise NotImplementedError()
 
     def get_queryset(self):
-        return self.get_list()
+        if isinstance(self, mixins.ListModelMixin):
+            return self.get_list()
+        else:
+            # get_queryset() is invoked whenever a detail extra action route
+            # returns a many valued response. For ViewSets that have such
+            # actions, return None here so they don't need to provide a
+            # get_list() implementation
+            return None
 
     def get_object(self):
         lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
@@ -98,6 +106,9 @@ class APIResultIterator(object):
     limit = -1
     offset = 0
 
+    def __init__(self, query_params=None):
+        self.query_params = query_params if query_params is not None else QueryDict()
+
     def get_results(self, limit=-1, offset=0):
         raise NotImplementedError("Subclasses must implement get_results")
 
@@ -126,6 +137,7 @@ class APIResultPagination(pagination.LimitOffsetPagination):
     def paginate_queryset(self, queryset, request, view=None):
         assert isinstance(
             queryset, APIResultIterator), "queryset is not an APIResultIterator: {}".format(queryset)
+        self.query_params = queryset.query_params.copy()
         self.limit = self.get_limit(request)
         if self.limit is None:
             return None
@@ -180,7 +192,10 @@ class APIResultPagination(pagination.LimitOffsetPagination):
 
     def get_base_url(self):
         if hasattr(self, 'viewname'):
-            return self.request.build_absolute_uri(reverse(self.viewname))
+            base_url = self.request.build_absolute_uri(reverse(self.viewname))
+            if len(self.query_params) > 0:
+                base_url += f"?{self.query_params.urlencode()}"
+            return base_url
         else:
             return self.request.build_absolute_uri()
 

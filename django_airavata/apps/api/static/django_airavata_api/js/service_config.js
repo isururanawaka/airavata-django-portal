@@ -8,6 +8,7 @@ import DataProduct from "./models/DataProduct";
 import Experiment from "./models/Experiment";
 import ExperimentSearchFields from "./models/ExperimentSearchFields";
 import ExperimentStatistics from "./models/ExperimentStatistics";
+import ExperimentStoragePath from "./models/ExperimentStoragePath";
 import ExperimentSummary from "./models/ExperimentSummary";
 import FullExperiment from "./models/FullExperiment";
 import GatewayResourceProfile from "./models/GatewayResourceProfile";
@@ -67,16 +68,16 @@ export default {
       getQueues: {
         url: "/api/application-deployments/<lookup>/queues/",
         requestType: "get",
-        modelClass: BatchQueue
-      }
+        modelClass: BatchQueue,
+      },
     },
     queryParams: ["appModuleId", "groupResourceProfileId"],
-    modelClass: ApplicationDeploymentDescription
+    modelClass: ApplicationDeploymentDescription,
   },
   ApplicationInterfaces: {
     url: "/api/application-interfaces",
     viewSet: true,
-    modelClass: ApplicationInterfaceDefinition
+    modelClass: ApplicationInterfaceDefinition,
   },
   ApplicationModules: {
     url: "/api/applications",
@@ -85,28 +86,28 @@ export default {
       getApplicationInterface: {
         url: "/api/applications/<lookup>/application_interface/",
         requestType: "get",
-        modelClass: ApplicationInterfaceDefinition
+        modelClass: ApplicationInterfaceDefinition,
       },
       getApplicationDeployments: {
         url: "/api/applications/<lookup>/application_deployments/",
         requestType: "get",
-        modelClass: ApplicationDeploymentDescription
+        modelClass: ApplicationDeploymentDescription,
       },
       listAll: {
         url: "/api/applications/list_all/",
         requestType: "get",
-        modelClass: ApplicationModule
+        modelClass: ApplicationModule,
       },
       favorite: {
         url: "/api/applications/<lookup>/favorite/",
-        requestType: "post"
+        requestType: "post",
       },
       unfavorite: {
         url: "/api/applications/<lookup>/unfavorite/",
-        requestType: "post"
-      }
+        requestType: "post",
+      },
     },
-    modelClass: ApplicationModule
+    modelClass: ApplicationModule,
   },
   ComputeResources: {
     url: "/api/compute-resources",
@@ -114,14 +115,14 @@ export default {
     methods: {
       names: {
         url: "/api/compute-resources/all_names/",
-        requestType: "get"
+        requestType: "get",
       },
       namesList: {
         url: "/api/compute-resources/all_names_list/",
-        requestType: "get"
-      }
+        requestType: "get",
+      },
     },
-    modelClass: ComputeResourceDescription
+    modelClass: ComputeResourceDescription,
   },
   CredentialSummaries: {
     url: "/api/credential-summaries/",
@@ -130,31 +131,31 @@ export default {
       allSSHCredentials: {
         url: "/api/credential-summaries/ssh/",
         requestType: "get",
-        modelClass: CredentialSummary
+        modelClass: CredentialSummary,
       },
       allPasswordCredentials: {
         url: "/api/credential-summaries/password/",
         requestType: "get",
-        modelClass: CredentialSummary
+        modelClass: CredentialSummary,
       },
       createSSH: {
         url: "/api/credential-summaries/create_ssh/",
         requestType: "post",
         bodyParams: {
-          name: "data"
+          name: "data",
         },
-        modelClass: CredentialSummary
+        modelClass: CredentialSummary,
       },
       createPassword: {
         url: "/api/credential-summaries/create_password/",
         requestType: "post",
         bodyParams: {
-          name: "data"
+          name: "data",
         },
-        modelClass: CredentialSummary
-      }
+        modelClass: CredentialSummary,
+      },
     },
-    modelClass: CredentialSummary
+    modelClass: CredentialSummary,
   },
   DataProducts: {
     url: "/api/data-products/",
@@ -162,11 +163,11 @@ export default {
       retrieve: {
         requestType: "get",
         queryParams: {
-          lookup: "product-uri"
+          lookup: "product-uri",
         },
-        modelClass: DataProduct
-      }
-    }
+        modelClass: DataProduct,
+      },
+    },
   },
   Experiments: {
     url: "/api/experiments/",
@@ -175,34 +176,34 @@ export default {
       launch: {
         url: "/api/experiments/<lookup>/launch/",
         requestType: "post",
-        modelClass: Experiment
+        modelClass: Experiment,
       },
       clone: {
         url: "/api/experiments/<lookup>/clone/",
         requestType: "post",
-        modelClass: Experiment
+        modelClass: Experiment,
       },
       cancel: {
         url: "/api/experiments/<lookup>/cancel/",
         requestType: "post",
-        modelClass: Experiment
-      }
+        modelClass: Experiment,
+      },
     },
-    modelClass: Experiment
+    modelClass: Experiment,
   },
   ExperimentSearch: {
     url: "/api/experiment-search",
     viewSet: [
       {
         name: "list",
-        initialDataParam: "initialData"
-      }
+        initialDataParam: "initialData",
+      },
     ],
     modelClass: ExperimentSummary,
     pagination: true,
     queryParams: ["limit", "offset"].concat(
-      ExperimentSearchFields.values.map(f => f.name)
-    )
+      ExperimentSearchFields.values.map((f) => f.name)
+    ),
   },
   ExperimentStatistics: {
     url: "/api/experiment-statistics",
@@ -215,45 +216,62 @@ export default {
           "toTime",
           "userName",
           "applicationName",
-          "resourceHostName"
+          "resourceHostName",
         ],
-        modelClass: ExperimentStatistics
-      }
-    }
+        modelClass: ExperimentStatistics,
+      },
+    },
+  },
+  ExperimentStoragePaths: {
+    url: "/api/experiment-storage",
+    methods: {
+      get: {
+        url: "/api/experiment-storage/<experimentId>/<path>",
+        requestType: "get",
+        modelClass: ExperimentStoragePath,
+        encodePathParams: false,
+      },
+    },
   },
   FullExperiments: {
     url: "/api/full-experiments",
     viewSet: [
       {
         name: "retrieve",
-        initialDataParam: "initialFullExperimentData"
-      }
+        initialDataParam: "initialFullExperimentData",
+      },
     ],
-    modelClass: FullExperiment
+    modelClass: FullExperiment,
   },
-  GatewayResourceProfiles: {
-    url: "/api/gateway-resource-profiles/",
-    viewSet: true,
+  GatewayResourceProfile: {
+    url: "/api/gateway-resource-profile/",
     methods: {
-      current: {
+      get: {
         url: "/api/gateway-resource-profile/",
         requestType: "get",
-        modelClass: GatewayResourceProfile
-      }
+        modelClass: GatewayResourceProfile,
+      },
+      update: {
+        requestType: "put",
+        bodyParams: {
+          name: "data",
+        },
+        modelClass: GatewayResourceProfile,
+      },
     },
-    modelClass: GatewayResourceProfile
+    modelClass: GatewayResourceProfile,
   },
   GroupResourceProfiles: {
     url: "/api/group-resource-profiles/",
     viewSet: true,
-    modelClass: GroupResourceProfile
+    modelClass: GroupResourceProfile,
   },
   Groups: {
     url: "/api/groups",
     viewSet: true,
     pagination: true,
     queryParams: ["limit", "offset"],
-    modelClass: Group
+    modelClass: Group,
   },
   IAMUserProfiles: {
     url: "/api/iam-user-profiles",
@@ -263,11 +281,11 @@ export default {
       enable: {
         url: "/api/iam-user-profiles/<lookup>/enable/",
         requestType: "post",
-        modelClass: IAMUserProfile
-      }
+        modelClass: IAMUserProfile,
+      },
     },
     queryParams: ["limit", "offset", "search"],
-    modelClass: IAMUserProfile
+    modelClass: IAMUserProfile,
   },
   LogRecords: {
     url: "/api/log",
@@ -276,18 +294,18 @@ export default {
         url: "/api/log",
         requestType: "post",
         bodyParams: {
-          name: "data"
+          name: "data",
         },
-        modelClass: LogRecord
-      }
+        modelClass: LogRecord,
+      },
     },
-    modelClass: LogRecord
+    modelClass: LogRecord,
   },
   Parsers: {
     url: "/api/parsers",
     viewSet: true,
     queryParams: ["limit", "offset"],
-    modelClass: Parser
+    modelClass: Parser,
   },
   Projects: {
     url: "/api/projects",
@@ -297,11 +315,11 @@ export default {
       listAll: {
         url: "/api/projects/list_all/",
         requestType: "get",
-        modelClass: Project
-      }
+        modelClass: Project,
+      },
     },
     queryParams: ["limit", "offset"],
-    modelClass: Project
+    modelClass: Project,
   },
   Settings: {
     url: "/api/settings/",
@@ -309,9 +327,9 @@ export default {
       get: {
         url: "/api/settings/",
         requestType: "get",
-        modelClass: Settings
-      }
-    }
+        modelClass: Settings,
+      },
+    },
   },
   SharedEntities: {
     url: "/api/shared-entities",
@@ -320,18 +338,18 @@ export default {
       merge: {
         url: "/api/shared-entities/<lookup>/merge/",
         bodyParams: {
-          name: "data"
+          name: "data",
         },
         requestType: "put",
-        modelClass: SharedEntity
-      }
+        modelClass: SharedEntity,
+      },
     },
-    modelClass: SharedEntity
+    modelClass: SharedEntity,
   },
   StoragePreferences: {
     url: "/api/storage-preferences/",
     viewSet: true,
-    modelClass: StoragePreference
+    modelClass: StoragePreference,
   },
   StorageResources: {
     url: "/api/storage-resources",
@@ -339,22 +357,22 @@ export default {
     methods: {
       names: {
         url: "/api/storage-resources/all_names/",
-        requestType: "get"
-      }
+        requestType: "get",
+      },
     },
-    modelClass: StorageResourceDescription
+    modelClass: StorageResourceDescription,
   },
   UnverifiedEmailUsers: {
     url: "/api/unverified-email-users",
     viewSet: true,
     pagination: true,
     queryParams: ["limit", "offset"],
-    modelClass: UnverifiedEmailUserProfile
+    modelClass: UnverifiedEmailUserProfile,
   },
   UserProfiles: {
     url: "/api/user-profiles",
     viewSet: ["list", "retrieve"],
-    modelClass: UserProfile
+    modelClass: UserProfile,
   },
   UserStoragePaths: {
     url: "/api/user-storage",
@@ -363,9 +381,9 @@ export default {
         url: "/api/user-storage/<path>",
         requestType: "get",
         modelClass: UserStoragePath,
-        encodePathParams: false
-      }
-    }
+        encodePathParams: false,
+      },
+    },
   },
   WorkspacePreferences: {
     url: "/api/workspace-preferences",
@@ -373,15 +391,15 @@ export default {
       get: {
         url: "/api/workspace-preferences",
         requestType: "get",
-        modelClass: WorkspacePreferences
-      }
-    }
+        modelClass: WorkspacePreferences,
+      },
+    },
   },
   ManageNotifications: {
     url: "/api/manage-notifications/",
     viewSet: true,
     pagination: false,
-    modelClass: Notification
+    modelClass: Notification,
   },
   APIServerStatusCheck: {
     url: "/api/api-status-check",
@@ -389,7 +407,7 @@ export default {
       get: {
         url: "/api/api-status-check/",
         requestType: "get",
-      }
-    }
+      },
+    },
   },
 };

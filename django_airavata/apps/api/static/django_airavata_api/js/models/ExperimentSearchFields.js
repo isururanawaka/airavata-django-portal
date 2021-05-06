@@ -9,5 +9,6 @@ ExperimentSearchFields.init([
   "TO_DATE",
   "STATUS",
   "PROJECT_ID",
-  "USER_NAME"
+  "USER_NAME",
+  "JOB_ID",
 ]);

@@ -1,13 +1,8 @@
-
 import copy
 import datetime
 import json
 import logging
 from urllib.parse import quote, urlencode
-
-from django.conf import settings
-from django.urls import reverse
-from rest_framework import serializers
 
 from airavata.model.appcatalog.appdeployment.ttypes import (
     ApplicationDeploymentDescription,
@@ -61,8 +56,12 @@ from airavata.model.workspace.ttypes import (
     NotificationPriority,
     Project
 )
+from airavata_django_portal_sdk import user_storage
+from django.conf import settings
+from django.urls import reverse
+from rest_framework import serializers
 
-from . import data_products_helper, models, thrift_utils
+from . import models, thrift_utils
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +75,7 @@ class FullyEncodedHyperlinkedIdentityField(
             lookup_value = obj.get(self.lookup_field)
         try:
             encoded_lookup_value = quote(lookup_value, safe="")
-        except Exception as e:
+        except Exception:
             log.warning(
                 "Failed to encode lookup_value [{}] for lookup_field "
                 "[{}] of object [{}]".format(
@@ -241,7 +240,6 @@ class GroupSerializer(thrift_utils.create_serializer_class(GroupModel)):
 
 class ProjectSerializer(
         thrift_utils.create_serializer_class(Project)):
-
     class Meta:
         required = ('name',)
         read_only = ('owner', 'gatewayId')
@@ -304,7 +302,6 @@ class ApplicationModuleSerializer(
 
 class InputDataObjectTypeSerializer(
         thrift_utils.create_serializer_class(InputDataObjectType)):
-
     metaData = StoredJSONField(required=False, allow_null=True)
 
     class Meta:
@@ -313,7 +310,6 @@ class InputDataObjectTypeSerializer(
 
 class OutputDataObjectTypeSerializer(
         thrift_utils.create_serializer_class(OutputDataObjectType)):
-
     metaData = StoredJSONField(required=False, allow_null=True)
 
     class Meta:
@@ -322,7 +318,6 @@ class OutputDataObjectTypeSerializer(
 
 class ApplicationInterfaceDescriptionSerializer(
         thrift_utils.create_serializer_class(ApplicationInterfaceDescription)):
-
     url = FullyEncodedHyperlinkedIdentityField(
         view_name='django_airavata_api:application-interface-detail',
         lookup_field='applicationInterfaceId',
@@ -350,8 +345,8 @@ class SetEnvPathsSerializer(
 
 
 class ApplicationDeploymentDescriptionSerializer(
-        thrift_utils.create_serializer_class(
-            ApplicationDeploymentDescription)):
+    thrift_utils.create_serializer_class(
+        ApplicationDeploymentDescription)):
     url = FullyEncodedHyperlinkedIdentityField(
         view_name='django_airavata_api:application-deployment-detail',
         lookup_field='appDeploymentId',
@@ -411,7 +406,6 @@ class ExperimentStatusSerializer(
 
 class ExperimentSerializer(
         thrift_utils.create_serializer_class(ExperimentModel)):
-
     class Meta:
         required = ('projectId', 'experimentType', 'experimentName')
         read_only = ('userName', 'gatewayId')
@@ -436,7 +430,8 @@ class ExperimentSerializer(
         view_name='django_airavata_api:shared-entity-detail',
         lookup_field='experimentId',
         lookup_url_kwarg='entity_id')
-    experimentInputs = serializers.ListField(
+    experimentInputs = OrderedListField(
+        order_by='inputOrder',
         child=InputDataObjectTypeSerializer(),
         allow_null=True)
     experimentOutputs = serializers.ListField(
@@ -445,25 +440,12 @@ class ExperimentSerializer(
     creationTime = UTCPosixTimestampDateTimeField(allow_null=True)
     experimentStatus = ExperimentStatusSerializer(many=True, allow_null=True)
     userHasWriteAccess = serializers.SerializerMethodField()
-    relativeExperimentDataDir = serializers.SerializerMethodField()
 
     def get_userHasWriteAccess(self, experiment):
         request = self.context['request']
         return request.airavata_client.userHasAccess(
             request.authz_token, experiment.experimentId,
             ResourcePermissionType.WRITE)
-
-    def get_relativeExperimentDataDir(self, experiment):
-        if (experiment.userConfigurationData and
-                experiment.userConfigurationData.experimentDataDir):
-            request = self.context['request']
-            data_dir = experiment.userConfigurationData.experimentDataDir
-            if data_products_helper.dir_exists(request, data_dir):
-                return data_products_helper.get_rel_path(request, data_dir)
-            else:
-                return None
-        else:
-            return None
 
 
 class DataReplicaLocationSerializer(
@@ -479,21 +461,29 @@ class DataProductSerializer(
     replicaLocations = DataReplicaLocationSerializer(many=True)
     downloadURL = serializers.SerializerMethodField()
     isInputFileUpload = serializers.SerializerMethodField()
+    filesize = serializers.SerializerMethodField()
 
     def get_downloadURL(self, data_product):
         """Getter for downloadURL field."""
         request = self.context['request']
-        if data_products_helper.exists(request, data_product):
+        if user_storage.exists(request, data_product):
             return (request.build_absolute_uri(
-                reverse('django_airavata_api:download_file')) +
-                '?' +
-                urlencode({'data-product-uri': data_product.productUri}))
+                reverse('django_airavata_api:download_file')) + '?' + urlencode({'data-product-uri': data_product.productUri}))
         return None
 
     def get_isInputFileUpload(self, data_product):
         """Return True if this is an uploaded input file."""
         request = self.context['request']
-        return data_products_helper.is_input_file_upload(request, data_product)
+        return user_storage.is_input_file(request, data_product)
+
+    def get_filesize(self, data_product):
+        request = self.context['request']
+        # For backwards compatibility with older user_storage, can be eventually removed
+        if hasattr(user_storage, 'get_data_product_metadata'):
+            metadata = user_storage.get_data_product_metadata(request, data_product)
+            return metadata['size']
+        else:
+            return 0
 
 
 # TODO move this into airavata_sdk?
@@ -601,7 +591,7 @@ class GroupResourceProfileSerializer(
             existing_compute_resource_preference = next(
                 (pref for pref in result.computePreferences
                  if pref.computeResourceId ==
-                    compute_resource_preference.computeResourceId),
+                 compute_resource_preference.computeResourceId),
                 None)
             if not existing_compute_resource_preference:
                 result._removed_compute_resource_preferences.append(
@@ -611,7 +601,7 @@ class GroupResourceProfileSerializer(
             existing_compute_resource_policy = next(
                 (pol for pol in result.computeResourcePolicies
                  if pol.resourcePolicyId ==
-                    compute_resource_policy.resourcePolicyId),
+                 compute_resource_policy.resourcePolicyId),
                 None)
             if not existing_compute_resource_policy:
                 result._removed_compute_resource_policies.append(
@@ -621,7 +611,7 @@ class GroupResourceProfileSerializer(
             existing_batch_queue_resource_policy_for_update = next(
                 (bq for bq in result.batchQueueResourcePolicies
                  if bq.resourcePolicyId ==
-                    batch_queue_resource_policy.resourcePolicyId),
+                 batch_queue_resource_policy.resourcePolicyId),
                 None)
             if not existing_batch_queue_resource_policy_for_update:
                 result._removed_batch_queue_resource_policies.append(
@@ -648,6 +638,7 @@ class GroupResourceProfileSerializer(
                 request.authz_token, token, ResourcePermissionType.READ)
             log.info(rel)
             return rel
+
         return all(map(check_token, tokens))
 
 
@@ -662,7 +653,6 @@ class GroupPermissionSerializer(serializers.Serializer):
 
 
 class SharedEntitySerializer(serializers.Serializer):
-
     entityId = serializers.CharField(read_only=True)
     userPermissions = UserPermissionSerializer(many=True)
     groupPermissions = GroupPermissionSerializer(many=True)
@@ -674,19 +664,25 @@ class SharedEntitySerializer(serializers.Serializer):
         raise Exception("Not implemented")
 
     def update(self, instance, validated_data):
-        # Compute lists of ids to grant/revoke READ/WRITE/MANAGE_SHARING permission
+        # Compute lists of ids to grant/revoke READ/WRITE/MANAGE_SHARING
+        # permission
         existing_user_permissions = {
             user['user'].airavataInternalUserId: user['permissionType']
             for user in instance['userPermissions']}
         new_user_permissions = {
             user['user']['airavataInternalUserId']:
-            user['permissionType']
-                for user in validated_data['userPermissions']}
+                user['permissionType']
+            for user in validated_data['userPermissions']}
 
-        (user_grant_read_permission, user_grant_write_permission, user_grant_manage_sharing_permission,
-         user_revoke_read_permission, user_revoke_write_permission, user_revoke_manage_sharing_permission) = \
-            self._compute_all_revokes_and_grants(existing_user_permissions,
-                                                 new_user_permissions)
+        (
+            user_grant_read_permission,
+            user_grant_write_permission,
+            user_grant_manage_sharing_permission,
+            user_revoke_read_permission,
+            user_revoke_write_permission,
+            user_revoke_manage_sharing_permission) = self._compute_all_revokes_and_grants(
+            existing_user_permissions,
+            new_user_permissions)
 
         existing_group_permissions = {
             group['group'].id: group['permissionType']
@@ -695,10 +691,15 @@ class SharedEntitySerializer(serializers.Serializer):
             group['group']['id']: group['permissionType']
             for group in validated_data['groupPermissions']}
 
-        (group_grant_read_permission, group_grant_write_permission, group_grant_manage_sharing_permission,
-         group_revoke_read_permission, group_revoke_write_permission, group_revoke_manage_sharing_permission) = \
-            self._compute_all_revokes_and_grants(existing_group_permissions,
-                                                 new_group_permissions)
+        (
+            group_grant_read_permission,
+            group_grant_write_permission,
+            group_grant_manage_sharing_permission,
+            group_revoke_read_permission,
+            group_revoke_write_permission,
+            group_revoke_manage_sharing_permission) = self._compute_all_revokes_and_grants(
+            existing_group_permissions,
+            new_group_permissions)
 
         instance['_user_grant_read_permission'] = user_grant_read_permission
         instance['_user_grant_write_permission'] = user_grant_write_permission
@@ -750,15 +751,23 @@ class SharedEntitySerializer(serializers.Serializer):
                 grant_write_permission.append(id)
             if ResourcePermissionType.MANAGE_SHARING in grants:
                 grant_manage_sharing_permission.append(id)
-        return (grant_read_permission, grant_write_permission, grant_manage_sharing_permission,
-                revoke_read_permission, revoke_write_permission, revoke_manage_sharing_permission)
+        return (
+            grant_read_permission,
+            grant_write_permission,
+            grant_manage_sharing_permission,
+            revoke_read_permission,
+            revoke_write_permission,
+            revoke_manage_sharing_permission)
 
     def _compute_revokes_and_grants(self, current_permission=None,
                                     new_permission=None):
         read_permissions = set((ResourcePermissionType.READ,))
         write_permissions = set((ResourcePermissionType.READ,
                                  ResourcePermissionType.WRITE))
-        manage_share_permissions = set((ResourcePermissionType.READ, ResourcePermissionType.WRITE, ResourcePermissionType.MANAGE_SHARING))
+        manage_share_permissions = set(
+            (ResourcePermissionType.READ,
+             ResourcePermissionType.WRITE,
+             ResourcePermissionType.MANAGE_SHARING))
         current_permissions_set = set()
         new_permissions_set = set()
         if current_permission == ResourcePermissionType.READ:
@@ -819,10 +828,6 @@ class StoragePreferenceSerializer(
 
 class GatewayResourceProfileSerializer(
         thrift_utils.create_serializer_class(GatewayResourceProfile)):
-    url = FullyEncodedHyperlinkedIdentityField(
-        view_name='django_airavata_api:gateway-resource-profile-detail',
-        lookup_field='gatewayID',
-        lookup_url_kwarg='gateway_id')
     storagePreferences = StoragePreferenceSerializer(many=True)
     userHasWriteAccess = serializers.SerializerMethodField()
 
@@ -853,6 +858,7 @@ class UserStorageFileSerializer(serializers.Serializer):
     downloadURL = serializers.SerializerMethodField()
     dataProductURI = serializers.CharField(source='data-product-uri')
     createdTime = serializers.DateTimeField(source='created_time')
+    mimeType = serializers.CharField(source='mime_type')
     size = serializers.IntegerField()
     hidden = serializers.BooleanField()
 
@@ -860,9 +866,7 @@ class UserStorageFileSerializer(serializers.Serializer):
         """Getter for downloadURL field."""
         request = self.context['request']
         return (request.build_absolute_uri(
-            reverse('django_airavata_api:download_file')) +
-            '?' +
-            urlencode({'data-product-uri': file['data-product-uri']}))
+            reverse('django_airavata_api:download_file')) + '?' + urlencode({'data-product-uri': file['data-product-uri']}))
 
 
 class UserStorageDirectorySerializer(serializers.Serializer):
@@ -878,11 +882,40 @@ class UserStorageDirectorySerializer(serializers.Serializer):
 
 
 class UserStoragePathSerializer(serializers.Serializer):
+    isDir = serializers.BooleanField()
     directories = UserStorageDirectorySerializer(many=True)
     files = UserStorageFileSerializer(many=True)
     parts = serializers.ListField(child=serializers.CharField())
     # uploaded is populated after a file upload
     uploaded = DataProductSerializer(read_only=True)
+
+
+# Fields for ExperimentStorageFileSerializer are the same as UserStorageFileSerializer
+ExperimentStorageFileSerializer = UserStorageFileSerializer
+
+
+class ExperimentStorageDirectorySerializer(serializers.Serializer):
+    name = serializers.CharField()
+    path = serializers.CharField()
+    createdTime = serializers.DateTimeField(source='created_time')
+    size = serializers.IntegerField()
+    url = serializers.SerializerMethodField()
+
+    def get_url(self, dir):
+
+        request = self.context['request']
+        return request.build_absolute_uri(
+            reverse("django_airavata_api:experiment-storage-items", kwargs={
+                "experiment_id": dir['experiment_id'],
+                "path": dir['path']
+            }))
+
+
+class ExperimentStoragePathSerializer(serializers.Serializer):
+    isDir = serializers.BooleanField()
+    directories = ExperimentStorageDirectorySerializer(many=True)
+    files = ExperimentStorageFileSerializer(many=True)
+    parts = serializers.ListField(child=serializers.CharField())
 
 
 # ModelSerializers

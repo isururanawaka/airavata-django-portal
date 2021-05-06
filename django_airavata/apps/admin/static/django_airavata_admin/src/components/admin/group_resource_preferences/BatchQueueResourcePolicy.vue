@@ -11,12 +11,13 @@
           id="max-allowed-nodes"
           type="number"
           v-model="data.maxAllowedNodes"
+          :readonly="readonly"
           @input="policyUpdated"
           min="1"
           :max="batchQueue.maxNodes"
           :formatter="numberFormatter"
           :placeholder="'Max Nodes: ' + batchQueue.maxNodes"
-        :state="validationFeedback.maxAllowedNodes.state"
+          :state="validationFeedback.maxAllowedNodes.state"
         >
         </b-form-input>
       </b-form-group>
@@ -32,12 +33,13 @@
           id="max-allowed-cores"
           type="number"
           v-model="data.maxAllowedCores"
+          :readonly="readonly"
           @input="policyUpdated"
           min="1"
           :max="batchQueue.maxProcessors"
           :formatter="numberFormatter"
           :placeholder="'Max Cores: ' + batchQueue.maxProcessors"
-        :state="validationFeedback.maxAllowedCores.state"
+          :state="validationFeedback.maxAllowedCores.state"
         >
         </b-form-input>
       </b-form-group>
@@ -46,19 +48,22 @@
       <b-form-group
         label="Maximum Allowed Wall Time"
         label-for="max-allowed-walltime"
-        :invalid-feedback="validationFeedback.maxAllowedWalltime.invalidFeedback"
+        :invalid-feedback="
+          validationFeedback.maxAllowedWalltime.invalidFeedback
+        "
         :state="validationFeedback.maxAllowedWalltime.state"
       >
         <b-form-input
           id="max-allowed-walltime"
           type="number"
           v-model="data.maxAllowedWalltime"
+          :readonly="readonly"
           @input="policyUpdated"
           min="1"
           :max="batchQueue.maxRunTime"
           :formatter="numberFormatter"
           :placeholder="'Max Wall Time: ' + batchQueue.maxRunTime"
-        :state="validationFeedback.maxAllowedWalltime.state"
+          :state="validationFeedback.maxAllowedWalltime.state"
         >
         </b-form-input>
       </b-form-group>
@@ -75,28 +80,32 @@ export default {
   props: {
     value: {
       required: false,
-      type: models.BatchQueueResourcePolicy
+      type: models.BatchQueueResourcePolicy,
     },
     batchQueue: {
       required: true,
-      type: models.BatchQueue
-    }
+      type: models.BatchQueue,
+    },
+    readonly:{
+      type: Boolean,
+      default: false,
+    },
   },
   created() {
     this.$on("input", this.validate);
     this.validate();
   },
-  data: function() {
+  data: function () {
     const localValue = this.value
       ? this.value.clone()
       : new models.BatchQueueResourcePolicy();
     localValue.queuename = this.batchQueue.queueName;
     return {
-      data: localValue
+      data: localValue,
     };
   },
   methods: {
-    policyUpdated: function() {
+    policyUpdated: function () {
       if (
         this.data.maxAllowedNodes ||
         this.data.maxAllowedCores ||
@@ -107,17 +116,17 @@ export default {
         this.$emit("input", null);
       }
     },
-    numberFormatter: function(value) {
+    numberFormatter: function (value) {
       const num = parseInt(value);
       return !isNaN(num) ? "" + num : value;
     },
     validate() {
       if (this.valid) {
-        this.$emit('valid');
+        this.$emit("valid");
       } else {
-        this.$emit('invalid');
+        this.$emit("invalid");
       }
-    }
+    },
   },
   computed: {
     valid() {
@@ -131,7 +140,7 @@ export default {
         this.data,
         this.validation
       );
-    }
-  }
+    },
+  },
 };
 </script>

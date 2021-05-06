@@ -83,6 +83,10 @@ def _validate_idp_alias(idp_alias):
 
 @sensitive_variables('password')
 def handle_login(request):
+    # This view handles a POST of the login form. If the request is a GET, just
+    # redirect to the login page.
+    if request.method == 'GET':
+        return redirect(reverse('django_airavata_auth:login'))
     username = request.POST['username']
     password = request.POST['password']
     login_type = request.POST.get('login_type', None)
@@ -94,6 +98,10 @@ def handle_login(request):
     logger.debug("authenticated user: {}".format(user))
     try:
         if user is not None:
+            # Middleware will add authz_token attr to request, but since user
+            # just authenticated, authz_token won't be added yet. Login signals
+            # need the authz_token so adding it to the request now.
+            request.authz_token = utils.get_authz_token(request, user=user)
             login(request, user)
             if login_desktop:
                 return _create_login_desktop_success_response(request)
@@ -245,7 +253,7 @@ def verify_email(request, code):
                 "Your account has been successfully created. "
                 "Please log in now.")
             return redirect(login_url)
-    except ObjectDoesNotExist as e:
+    except ObjectDoesNotExist:
         # if doesn't exist, give user a form where they can enter their
         # username to resend verification code
         logger.exception("EmailVerification object doesn't exist for "
@@ -255,7 +263,7 @@ def verify_email(request, code):
             "Email verification failed. Please enter your username and we "
             "will send you another email verification link.")
         return redirect(reverse('django_airavata_auth:resend_email_link'))
-    except Exception as e:
+    except Exception:
         logger.exception("Email verification processing failed!")
         messages.error(
             request,
@@ -398,7 +406,7 @@ def reset_password(request, code):
     try:
         password_reset_request = models.PasswordResetRequest.objects.get(
             reset_code=code)
-    except ObjectDoesNotExist as e:
+    except ObjectDoesNotExist:
         messages.error(
             request,
             "Reset password link is invalid. Please try again.")

@@ -57,7 +57,7 @@ const errors = {
   ErrorUtils,
   UnhandledError,
   UnhandledErrorDispatcher,
-  UnhandledErrorDisplayList
+  UnhandledErrorDisplayList,
 };
 
 const models = {
@@ -93,7 +93,7 @@ const models = {
   SharedEntity,
   StoragePreference,
   SummaryType,
-  UserPermission
+  UserPermission,
 };
 
 const services = {
@@ -110,9 +110,10 @@ const services = {
   ExperimentSearchService: ServiceFactory.service("ExperimentSearch"),
   ExperimentService: ServiceFactory.service("Experiments"),
   ExperimentStatisticsService: ServiceFactory.service("ExperimentStatistics"),
+  ExperimentStoragePathService: ServiceFactory.service("ExperimentStoragePaths"),
   FullExperimentService: ServiceFactory.service("FullExperiments"),
   GatewayResourceProfileService: ServiceFactory.service(
-    "GatewayResourceProfiles"
+    "GatewayResourceProfile"
   ),
   GlobusJobSubmissionService,
   GridFTPDataMovementService,
@@ -139,17 +140,17 @@ const services = {
   ),
   UserProfileService: ServiceFactory.service("UserProfiles"),
   UserStoragePathService: ServiceFactory.service("UserStoragePaths"),
-  WorkspacePreferencesService: ServiceFactory.service("WorkspacePreferences")
+  WorkspacePreferencesService: ServiceFactory.service("WorkspacePreferences"),
 };
 
 const session = {
-  Session
+  Session,
 };
 
 const utils = {
   FetchUtils,
   PaginationIterator,
-  StringUtils
+  StringUtils,
 };
 
 export default {
@@ -157,7 +158,7 @@ export default {
   models,
   services,
   session,
-  utils
+  utils,
 };
 
 export { errors, models, services, session, utils };

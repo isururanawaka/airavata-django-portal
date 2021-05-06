@@ -15,7 +15,7 @@ output view provider will be invoked and it should return image data.
 ## Getting started
 
 See the
-[Gateways 2019 tutorial](../tutorial/gateways2019_tutorial.md#tutorial-exercise-create-a-custom-output-viewer-for-an-output-file)
+[Gateways tutorial](../tutorial/gateways_tutorial.md#tutorial-exercise-create-a-custom-output-viewer-for-an-output-file)
 for help on setting up a development environment and implementing a simple
 output view provider.
 
@@ -54,6 +54,20 @@ environment using:
 python setup.py develop
 ```
 
+### Setting up remote data access
+
+To access the files in the remote deployed Django portal instance in your local
+development environment you need to configure a setting so that your local
+Django instance knows at what URL is the remote deployed Django portal REST API.
+The remote API will be used for accessing data, making your local instance
+behave just like the remote instance. Set the GATEWAY_DATA_STORE_REMOTE_API in
+settings_local.py to have the domain of the remote deployed Django portal:
+
+```
+# Change this to match your remote Django portal instance
+GATEWAY_DATA_STORE_REMOTE_API = 'https://testdrive.airavata.org/api'
+```
+
 ## Reference
 
 ### Output View Provider interface
@@ -63,12 +77,15 @@ the following attributes:
 
 -   `display_type`: this should be one of _link_, _image_ or _html_.
 -   `name`: this is the name of the output view provider displayed to the user.
--   `test_output_file`: (optional) the path to a file to use for testing
-    purposes. This file will be passed to the `generate_data` function as the
-    `output_file` parameter when the output file isn't available and the Django
-    server is running in DEBUG mode. This is helpful when developing a custom
-    output view provider in a local Django instance that doesn't have access to
-    the output files.
+
+Optional attributes that can be defined on the output view provider class
+include:
+
+-   `test_output_file`: this is a file path to an file that will be substituted
+    for the actual file for testing the output view provider. This is only used
+    during development and will only work with the Django DEBUG setting is True.
+    For more information, see
+    [Using test_output_file in development](#using-test_output_file-in-development).
 
 The output view provider class should define the following method:
 
@@ -80,6 +97,35 @@ def generate_data(self, request, experiment_output, experiment, output_file=None
         #...
     }
 ```
+
+For the output view provider to work with experiment outputs of type
+URI_COLLECTION, add `output_files=None` to the function signature and get the
+output as a list of file objects.
+
+```python
+# For URI_COLLECTION, add output_files=None to signature
+def generate_data(self, request, experiment_output, experiment, output_files=None, **kwargs):
+
+    # Return a dictionary
+    return {
+        #...
+    }
+```
+
+The arguments to the `generate_data` function are described below:
+
+-   `request` -
+    [Django Request](https://docs.djangoproject.com/en/dev/ref/request-response/#django.http.HttpRequest)
+    object.
+-   `experiment_output` - Airavata metadata about output file(s), see
+    [OutputDataObjectType doc](http://airavata.apache.org/api-docs/master/application_io_models.html#Struct_OutputDataObjectType).
+-   `experiment` - Airavata metadata about the experiment, see
+    [ExperimentModel doc](http://airavata.apache.org/api-docs/master/experiment_model.html#Struct_ExperimentModel).
+-   `output_file` - Python
+    [file-like object](https://docs.python.org/3/glossary.html#term-file-object).
+    Read from this file to process the contents of the output file.
+-   `output_files` - If the output type is URI_COLLECTION, then the collection
+    of files is given as a list of file-like objects.
 
 The required contents of the dictionary varies based on the _display type_.
 
@@ -123,7 +169,7 @@ The returned dictionary should include the following entries:
 
 **Examples**
 
--   [dREG - DregGenomeBrowserViewProvider](https://github.com/SciGaP/dreg-djangoapp/blob/master/dreg_djangoapp/output_views.py#L4)
+-   [dREG - DregGenomeBrowserViewProvider](https://github.com/SciGaP/dreg-djangoapp/blob/gbrowser/dreg_djangoapp/output_views.py)
 
 ### Entry Point registration
 
@@ -193,6 +239,63 @@ output-view-providers and place it second. For example:
 
 would make the `gaussian-eigenvalues-plot` the initial output view provider. The
 user can access the default output view provider from the drop down menu.
+
+### Accessing additional experiment output files
+
+The output view provider is associated with a particular output file, but your
+output view provider can access other files in the experiment data directory. To
+access those files use the `list_experiment_dir` of the
+[user_storage module](https://airavata-django-portal-sdk.readthedocs.io/en/latest/#module-user_storage)
+in the Airavata Django Portal SDK.
+
+```python
+from airavata_django_portal_sdk import user_storage
+def generate_data(self, request, experiment_output, experiment, output_file=None, **kwargs):
+
+    dirs, files = user_storage.list_experiment_dir(request, experiment.experimentId)
+    # ...
+```
+
+`list_experiment_dir` returns a tuple of directories and files in the experiment
+data directory. Each entry is a dictionary of metadata about the directory/file.
+See the SDK documentation for more information.
+
+### Using test_output_file in development
+
+The output view provider class can specify a `test_output_file` attribute. The
+value should be the file path to a sample output file within the output view
+provider's Python package. For an example of how to set `test_output_file`, see
+[this example](https://github.com/machristie/gateways19-tutorial/blob/044d4c6ddda48e7d0fa17f6c1d84936919c9303c/gateways19_tutorial/output_views.py#L14).
+This file will substitute for the real experiment output file when the Django
+DEBUG setting is True and the output view provider request is made in _test
+mode_. This can be used to develop the output view provider with a sample output
+file when access to an actual experiment generated output file is not easily
+available (see [Setting up remote data access](#setting-up-remote-data-access)
+for information on using experiment outputs in your local development
+environment if experiment generated output files are an option for you).
+
+To enable _test mode_, you have two options. First, you can test the output view
+provider REST API directly and add a query parameter of `test-mode=true`:
+
+    http://localhost:8000/api/image-output?experiment-id=...expid...&experiment-output-name=Gaussian-Application-Output&provider-id=gaussian-eigenvalues-plot&test-mode=true
+
+But substitute your experiment id, etc and change `image-output` to
+`html-output` or `link-output` or whatever display type is appropriate for your
+output view provider. You can load the output view in the Airavata Django Portal
+and then in your browser's developer tools, find the REST API request, open it
+in a new tab and change the test-mode value to `true`.
+
+Second, you can modify the output view provider UI to always pass
+`test-mode=true` when making REST API requests to load data from output view
+providers. To do this, open the OutputViewDataLoader.js file and change
+TEST_MODE to `true`:
+
+```javascript
+const TEST_MODE = true;
+```
+
+Then in `django_airavata/apps/workspace` run `yarn && yarn build` (or
+`yarn && yarn serve` if you are developing frontend code).
 
 ### Interactive parameters
 

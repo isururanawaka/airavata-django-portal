@@ -16,11 +16,28 @@
             v-if="data.item.userHasWriteAccess"
             :to="{
               name: 'group_resource_preference',
-              params: { value: data.item, id: data.item.groupResourceProfileId }
+              params: {
+                value: data.item,
+                id: data.item.groupResourceProfileId,
+              },
             }"
           >
             Edit
             <i class="fa fa-edit" aria-hidden="true"></i>
+          </router-link>
+          <router-link
+            class="action-link"
+            v-if="!data.item.userHasWriteAccess"
+            :to="{
+              name: 'group_resource_preference',
+              params: {
+                value: data.item,
+                id: data.item.groupResourceProfileId,
+              },
+            }"
+          >
+            View
+            <i class="fa fa-eye" aria-hidden="true"></i>
           </router-link>
           <delete-link
             v-if="data.item.userHasWriteAccess"
@@ -28,7 +45,8 @@
             @delete="removeGroupResourceProfile(data.item)"
           >
             Are you sure you want to delete Group Resource Profile
-            <strong>{{ data.item.groupResourceProfileName }}</strong>?
+            <strong>{{ data.item.groupResourceProfileName }}</strong
+            >?
           </delete-link>
         </template>
       </b-table>
@@ -45,53 +63,53 @@ export default {
   components: {
     "delete-link": components.DeleteLink,
     "human-date": components.HumanDate,
-    "list-layout": layouts.ListLayout
+    "list-layout": layouts.ListLayout,
   },
-  data: function() {
+  data: function () {
     return {
       groupResourceProfiles: [],
       fields: [
         {
           label: "Name",
-          key: "groupResourceProfileName"
+          key: "groupResourceProfileName",
         },
         {
           label: "Updated",
-          key: "updatedTime"
+          key: "updatedTime",
         },
         {
           label: "Action",
-          key: "action"
-        }
-      ]
+          key: "action",
+        },
+      ],
     };
   },
   methods: {
-    newGroupResourcePreference: function() {
+    newGroupResourcePreference: function () {
       this.$router.push({
-        name: "new_group_resource_preference"
+        name: "new_group_resource_preference",
       });
     },
-    loadGroupResourceProfiles: function() {
+    loadGroupResourceProfiles: function () {
       services.GroupResourceProfileService.list().then(
-        groupResourceProfiles => {
+        (groupResourceProfiles) => {
           this.groupResourceProfiles = groupResourceProfiles;
         }
       );
     },
-    removeGroupResourceProfile: function(groupResourceProfile) {
+    removeGroupResourceProfile: function (groupResourceProfile) {
       services.GroupResourceProfileService.delete({
-        lookup: groupResourceProfile.groupResourceProfileId
+        lookup: groupResourceProfile.groupResourceProfileId,
       })
         .then(() => services.GroupResourceProfileService.list())
         .then(
-          groupResourceProfiles =>
+          (groupResourceProfiles) =>
             (this.groupResourceProfiles = groupResourceProfiles)
         );
-    }
+    },
   },
-  mounted: function() {
+  mounted: function () {
     this.loadGroupResourceProfiles();
-  }
+  },
 };
 </script>
