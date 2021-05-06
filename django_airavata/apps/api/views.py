@@ -3,19 +3,9 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
-from django.conf import settings
-from django.contrib.auth.decorators import login_required
-from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
-from django.http import FileResponse, Http404, HttpResponse, JsonResponse
-from django.urls import reverse
-from rest_framework import mixins
-from rest_framework.decorators import action, detail_route, list_route
-from rest_framework.exceptions import ParseError
-from rest_framework.renderers import JSONRenderer
-from rest_framework.response import Response
-from rest_framework.views import APIView
-
+import requests
 from airavata.model.appcatalog.computeresource.ttypes import (
     CloudJobSubmission,
     GlobusJobSubmission,
@@ -34,6 +24,19 @@ from airavata.model.data.movement.ttypes import (
 from airavata.model.experiment.ttypes import ExperimentSearchFields
 from airavata.model.group.ttypes import ResourcePermissionType
 from airavata.model.user.ttypes import Status
+from airavata_django_portal_sdk import user_storage
+from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
+from django.urls import reverse
+from django.views.decorators.gzip import gzip_page
+from rest_framework import mixins, status
+from rest_framework.decorators import action, api_view
+from rest_framework.exceptions import ParseError
+from rest_framework.renderers import JSONRenderer
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
 from django_airavata.apps.api.view_utils import (
     APIBackedViewSet,
     APIResultIterator,
@@ -45,7 +48,6 @@ from django_airavata.apps.auth import iam_admin_client
 from django_airavata.apps.auth.models import EmailVerification
 
 from . import (
-    data_products_helper,
     exceptions,
     helpers,
     models,
@@ -96,7 +98,6 @@ class GroupViewSet(APIBackedViewSet):
         group = serializer.save()
         group_manager_client = self.request.profile_service['group_manager']
         if len(group._added_members) > 0:
-            log.info(group._added_members)
             group_manager_client.addUsersToGroup(
                 self.authz_token, group._added_members, group.id)
             self._send_users_added_to_group(group._added_members, group)
@@ -118,8 +119,9 @@ class GroupViewSet(APIBackedViewSet):
 
     def _send_users_added_to_group(self, internal_user_ids, group):
         for internal_user_id in internal_user_ids:
+            user_id, gateway_id = internal_user_id.rsplit("@", maxsplit=1)
             user_profile = self.request.profile_service['user_profile'].getUserProfileById(
-                self.authz_token, internal_user_id, self.authz_token.claimsMap['gatewayID'])
+                self.authz_token, user_id, gateway_id)
             signals.user_added_to_group.send(
                 sender=self.__class__,
                 user=user_profile,
@@ -162,7 +164,7 @@ class ProjectViewSet(APIBackedViewSet):
             self.authz_token, project.projectID, project)
         self._update_most_recent_project(project.projectID)
 
-    @list_route()
+    @action(detail=False)
     def list_all(self, request):
         projects = self.request.airavata_client.getUserProjects(
             self.authz_token, self.gateway_id, self.username, -1, 0)
@@ -170,7 +172,7 @@ class ProjectViewSet(APIBackedViewSet):
             projects, many=True, context={'request': request})
         return Response(serializer.data)
 
-    @detail_route()
+    @action(detail=True)
     def experiments(self, request, project_id=None):
         experiments = request.airavata_client.getExperimentsInProject(
             self.authz_token, project_id, -1, 0)
@@ -184,13 +186,12 @@ class ProjectViewSet(APIBackedViewSet):
         prefs.save()
 
 
-class ExperimentViewSet(APIBackedViewSet):
+class ExperimentViewSet(mixins.CreateModelMixin,
+                        mixins.RetrieveModelMixin,
+                        mixins.UpdateModelMixin,
+                        GenericAPIBackedViewSet):
     serializer_class = serializers.ExperimentSerializer
     lookup_field = 'experiment_id'
-
-    def get_list(self):
-        return self.request.airavata_client.getUserExperiments(
-            self.authz_token, self.gateway_id, self.username, -1, 0)
 
     def get_instance(self, lookup_value):
         return self.request.airavata_client.getExperiment(
@@ -227,13 +228,13 @@ class ExperimentViewSet(APIBackedViewSet):
         if not experiment.userConfigurationData.experimentDataDir:
             project = self.request.airavata_client.getProject(
                 self.authz_token, experiment.projectId)
-            exp_dir = data_products_helper.get_experiment_dir(
+            exp_dir = user_storage.get_experiment_dir(
                 self.request, project.name, experiment.experimentName)
             experiment.userConfigurationData.experimentDataDir = exp_dir
         else:
             # get_experiment_dir will also validate that absolute paths are
             # inside the user's storage directory
-            exp_dir = data_products_helper.get_experiment_dir(
+            exp_dir = user_storage.get_experiment_dir(
                 self.request,
                 path=experiment.userConfigurationData.experimentDataDir)
             experiment.userConfigurationData.experimentDataDir = exp_dir
@@ -257,16 +258,16 @@ class ExperimentViewSet(APIBackedViewSet):
                 experiment_input.value = ",".join(moved_data_product_uris)
 
     def _move_if_tmp_input_file_upload(
-        self, data_product_uri, experiment_data_dir):
+            self, data_product_uri, experiment_data_dir):
         """
         Conditionally moves tmp input file to data dir and returns new dp URI.
         """
         data_product = self.request.airavata_client.getDataProduct(
             self.authz_token, data_product_uri)
-        if data_products_helper.is_input_file_upload(
-            self.request, data_product):
+        if user_storage.is_input_file(
+                self.request, data_product):
             moved_data_product = \
-                data_products_helper.move_input_file_upload(
+                user_storage.move_input_file(
                     self.request,
                     data_product,
                     experiment_data_dir)
@@ -274,22 +275,42 @@ class ExperimentViewSet(APIBackedViewSet):
         else:
             return data_product_uri
 
-    @detail_route(methods=['post'])
+    @action(methods=['post'], detail=True)
     def launch(self, request, experiment_id=None):
         try:
             experiment = request.airavata_client.getExperiment(
                 self.authz_token, experiment_id)
-            self._set_storage_id_and_data_dir(experiment)
-            self._move_tmp_input_file_uploads_to_data_dir(experiment)
+            if (experiment.enableEmailNotification):
+                experiment.emailAddresses = [request.user.email]
             request.airavata_client.updateExperiment(
                 self.authz_token, experiment_id, experiment)
-            request.airavata_client.launchExperiment(
-                request.authz_token, experiment_id, self.gateway_id)
-            return Response({'success': True})
+            if getattr(
+                settings,
+                'GATEWAY_DATA_STORE_REMOTE_API',
+                    None) is not None:
+                # Proxy the launch/ request to the remote Django portal
+                # instance since it must setup the experiment data directory
+                # which is only on the remote Django portal instance
+                headers = {
+                    'Authorization': f'Bearer {request.authz_token.accessToken}'}
+                r = requests.post(
+                    f'{settings.GATEWAY_DATA_STORE_REMOTE_API}/experiments/{quote(experiment_id)}/launch/',
+                    headers=headers,
+                )
+                r.raise_for_status()
+                return Response(r.json())
+            else:
+                self._set_storage_id_and_data_dir(experiment)
+                self._move_tmp_input_file_uploads_to_data_dir(experiment)
+                request.airavata_client.updateExperiment(
+                    self.authz_token, experiment_id, experiment)
+                request.airavata_client.launchExperiment(
+                    request.authz_token, experiment_id, self.gateway_id)
+                return Response({'success': True})
         except Exception as e:
             return Response({'success': False, 'errorMessage': e.message})
 
-    @detail_route(methods=['get'])
+    @action(methods=['get'], detail=True)
     def jobs(self, request, experiment_id=None):
         jobs = request.airavata_client.getJobDetails(
             self.authz_token, experiment_id)
@@ -297,35 +318,50 @@ class ExperimentViewSet(APIBackedViewSet):
             jobs, many=True, context={'request': request})
         return Response(serializer.data)
 
-    @detail_route(methods=['post'])
+    @action(methods=['post'], detail=True)
     def clone(self, request, experiment_id=None):
+        if getattr(
+            settings,
+            'GATEWAY_DATA_STORE_REMOTE_API',
+                None) is not None:
+            # Proxy the clone/ request to the remote Django portal instance
+            # since it must locally copy input files, which are only on the
+            # remote Django portal instance
+            headers = {
+                'Authorization': f'Bearer {request.authz_token.accessToken}'}
+            r = requests.post(
+                f'{settings.GATEWAY_DATA_STORE_REMOTE_API}/experiments/{quote(experiment_id)}/clone/',
+                headers=headers,
+            )
+            r.raise_for_status()
+            return Response(r.json())
+        else:
+            # figure what project to clone into
+            experiment = self.request.airavata_client.getExperiment(
+                self.authz_token, experiment_id)
+            project_id = self._get_writeable_project(experiment)
 
-        # figure what project to clone into
-        experiment = self.request.airavata_client.getExperiment(
-            self.authz_token, experiment_id)
-        project_id = self._get_writeable_project(experiment)
+            # clone experiment
+            cloned_experiment_id = request.airavata_client.cloneExperiment(
+                self.authz_token, experiment_id,
+                "Clone of {}".format(experiment.experimentName), project_id)
+            cloned_experiment = request.airavata_client.getExperiment(
+                self.authz_token, cloned_experiment_id)
 
-        # clone experiment
-        cloned_experiment_id = request.airavata_client.cloneExperiment(
-            self.authz_token, experiment_id,
-            "Clone of {}".format(experiment.experimentName), project_id)
-        cloned_experiment = request.airavata_client.getExperiment(
-            self.authz_token, cloned_experiment_id)
+            # Create a copy of the experiment input files
+            self._copy_cloned_experiment_input_uris(cloned_experiment)
 
-        # Create a copy of the experiment input files
-        self._copy_cloned_experiment_input_uris(cloned_experiment)
+            # Null out experimentDataDir so a new one will get created at launch
+            # time
+            cloned_experiment.userConfigurationData.experimentDataDir = None
+            request.airavata_client.updateExperiment(
+                self.authz_token, cloned_experiment.experimentId, cloned_experiment
+            )
+            serializer = self.serializer_class(
+                cloned_experiment, context={'request': request})
+            return Response(serializer.data)
 
-        # Null out experimentDataDir so a new one will get created at launch
-        # time
-        cloned_experiment.userConfigurationData.experimentDataDir = None
-        request.airavata_client.updateExperiment(
-            self.authz_token, cloned_experiment.experimentId, cloned_experiment
-        )
-        serializer = self.serializer_class(
-            cloned_experiment, context={'request': request})
-        return Response(serializer.data)
-
-    @detail_route(methods=['post'])
+    @action(methods=['post'], detail=True)
     def cancel(self, request, experiment_id=None):
         try:
             request.airavata_client.terminateExperiment(
@@ -346,7 +382,7 @@ class ExperimentViewSet(APIBackedViewSet):
         workspace_preferences = models.WorkspacePreferences.objects.filter(
             username=self.username).first()
         if (workspace_preferences and self._can_write(
-            workspace_preferences.most_recent_project_id)):
+                workspace_preferences.most_recent_project_id)):
             return workspace_preferences.most_recent_project_id
         user_projects = self.request.airavata_client.getUserProjects(
             self.authz_token, self.gateway_id, self.username, -1, 0)
@@ -394,16 +430,14 @@ class ExperimentViewSet(APIBackedViewSet):
                 experiment_input.value = ",".join(cloned_data_product_uris)
 
     def _copy_experiment_input_uri(
-        self,
-        data_product_uri):
-        source_data_product = self.request.airavata_client.getDataProduct(
-            self.authz_token, data_product_uri)
-        if data_products_helper.exists(self.request, source_data_product):
-            return data_products_helper.copy_input_file_upload(
-                self.request, source_data_product)
+            self,
+            data_product_uri):
+        if user_storage.exists(self.request, data_product_uri=data_product_uri):
+            return user_storage.copy_input_file(
+                self.request, data_product_uri=data_product_uri)
         else:
             log.warning("Could not find file for source data "
-                        "product {}".format(source_data_product))
+                        "product {}".format(data_product_uri))
             return None
 
     def _update_workspace_preferences(self, project_id,
@@ -438,7 +472,8 @@ class ExperimentSearchViewSet(mixins.ListModelMixin, GenericAPIBackedViewSet):
                     view.authz_token, view.gateway_id, view.username, filters,
                     limit, offset)
 
-        return ExperimentSearchResultIterator()
+        # Preserve query parameters when moving to next and previous links
+        return ExperimentSearchResultIterator(query_params=self.request.query_params.copy())
 
     def get_instance(self, lookup_value):
         raise NotImplementedError()
@@ -475,7 +510,7 @@ class FullExperimentViewSet(mixins.RetrieveModelMixin,
             applicationInterface = self.request.airavata_client \
                 .getApplicationInterface(self.authz_token, appInterfaceId)
         except Exception as e:
-            log.exception("Failed to load app interface")
+            log.warning(f"Failed to load app interface: {e}")
             applicationInterface = None
         exp_output_views = output_views.get_output_views(
             self.request, experimentModel, applicationInterface)
@@ -495,6 +530,7 @@ class FullExperimentViewSet(mixins.RetrieveModelMixin,
                 inp.type == DataType.URI_COLLECTION)
             for dp in inp.value.split(',')
             if inp.value.startswith('airavata-dp')]
+        applicationModule = None
         try:
             if applicationInterface is not None:
                 appModuleId = applicationInterface.applicationModules[0]
@@ -502,10 +538,9 @@ class FullExperimentViewSet(mixins.RetrieveModelMixin,
                     .getApplicationModule(self.authz_token, appModuleId)
             else:
                 log.warning(
-                    "Cannot log application model since app interface failed to load")
-        except Exception as e:
+                    "Cannot load application model since app interface failed to load")
+        except Exception:
             log.exception("Failed to load app interface/module")
-            applicationModule = None
 
         compute_resource_id = None
         user_conf = experimentModel.userConfigurationData
@@ -516,14 +551,14 @@ class FullExperimentViewSet(mixins.RetrieveModelMixin,
             compute_resource = self.request.airavata_client.getComputeResource(
                 self.authz_token, compute_resource_id) \
                 if compute_resource_id else None
-        except Exception as e:
+        except Exception:
             log.exception("Failed to load compute resource for {}".format(
                 compute_resource_id))
             compute_resource = None
         if self.request.airavata_client.userHasAccess(
-            self.authz_token,
-            experimentModel.projectId,
-            ResourcePermissionType.READ):
+                self.authz_token,
+                experimentModel.projectId,
+                ResourcePermissionType.READ):
             project = self.request.airavata_client.getProject(
                 self.authz_token, experimentModel.projectId)
         else:
@@ -570,7 +605,7 @@ class ApplicationModuleViewSet(APIBackedViewSet):
         self.request.airavata_client.deleteApplicationModule(
             self.authz_token, instance.appModuleId)
 
-    @detail_route()
+    @action(detail=True)
     def application_interface(self, request, app_module_id):
         all_app_interfaces = request.airavata_client.getAllApplicationInterfaces(
             self.authz_token, self.gateway_id)
@@ -587,16 +622,16 @@ class ApplicationModuleViewSet(APIBackedViewSet):
         elif len(app_interfaces) > 1:
             log.error(
                 "More than one application interface found for module {}: {}"
-                    .format(app_module_id, app_interfaces))
+                .format(app_module_id, app_interfaces))
             raise Exception(
                 'More than one application interface found for module {}'
-                    .format(app_module_id)
+                .format(app_module_id)
             )
         else:
             raise Http404("No application interface found for module id {}"
                           .format(app_module_id))
 
-    @detail_route()
+    @action(detail=True)
     def application_deployments(self, request, app_module_id):
         all_deployments = self.request.airavata_client.getAllApplicationDeployments(
             self.authz_token, self.gateway_id)
@@ -606,7 +641,7 @@ class ApplicationModuleViewSet(APIBackedViewSet):
             app_deployments, many=True, context={'request': request})
         return Response(serializer.data)
 
-    @detail_route(methods=['post'])
+    @action(methods=['post'], detail=True)
     def favorite(self, request, app_module_id):
         helper = helpers.WorkspacePreferencesHelper()
         workspace_preferences = helper.get(request)
@@ -624,7 +659,7 @@ class ApplicationModuleViewSet(APIBackedViewSet):
 
         return HttpResponse(status=204)
 
-    @detail_route(methods=['post'])
+    @action(methods=['post'], detail=True)
     def unfavorite(self, request, app_module_id):
         helper = helpers.WorkspacePreferencesHelper()
         workspace_preferences = helper.get(request)
@@ -642,7 +677,7 @@ class ApplicationModuleViewSet(APIBackedViewSet):
 
         return HttpResponse(status=204)
 
-    @list_route()
+    @action(detail=False)
     def list_all(self, request, format=None):
         all_modules = self.request.airavata_client.getAllAppModules(
             self.authz_token, self.gateway_id)
@@ -691,14 +726,14 @@ class ApplicationInterfaceViewSet(APIBackedViewSet):
                 # toggle isRequired on hidden/shown inputs
                 if ("editor" in metadata and
                     "dependencies" in metadata["editor"] and
-                    "show" in metadata["editor"]["dependencies"]):
+                        "show" in metadata["editor"]["dependencies"]):
                     if "showOptions" not in metadata["editor"]["dependencies"]:
                         metadata["editor"]["dependencies"]["showOptions"] = {}
                     o = metadata["editor"]["dependencies"]["showOptions"]
                     o["isRequired"] = app_input.isRequired
                     app_input.metaData = json.dumps(metadata)
 
-    @detail_route()
+    @action(detail=True)
     def compute_resources(self, request, app_interface_id):
         compute_resources = request.airavata_client.getAvailableAppInterfaceComputeResources(
             self.authz_token, app_interface_id)
@@ -713,8 +748,8 @@ class ApplicationDeploymentViewSet(APIBackedViewSet):
         app_module_id = self.request.query_params.get('appModuleId', None)
         group_resource_profile_id = self.request.query_params.get(
             'groupResourceProfileId', None)
-        if (app_module_id and not group_resource_profile_id) \
-            or (not app_module_id and group_resource_profile_id):
+        if (app_module_id and not group_resource_profile_id)\
+                or (not app_module_id and group_resource_profile_id):
             raise ParseError("Query params appModuleId and "
                              "groupResourceProfileId are required together.")
         if app_module_id and group_resource_profile_id:
@@ -743,7 +778,7 @@ class ApplicationDeploymentViewSet(APIBackedViewSet):
         self.request.airavata_client.deleteApplicationDeployment(
             self.authz_token, instance.appDeploymentId)
 
-    @detail_route()
+    @action(detail=True)
     def queues(self, request, app_deployment_id):
         """Return queues for this deployment with defaults overridden by deployment defaults if they exist"""
         app_deployment = self.request.airavata_client.getApplicationDeployment(
@@ -777,14 +812,14 @@ class ComputeResourceViewSet(mixins.RetrieveModelMixin,
         return self.request.airavata_client.getComputeResource(
             self.authz_token, lookup_value)
 
-    @list_route()
+    @action(detail=False)
     def all_names(self, request, format=None):
         """Return a map of compute resource names keyed by resource id."""
         return Response(
             request.airavata_client.getAllComputeResourceNames(
                 request.authz_token))
 
-    @list_route()
+    @action(detail=False)
     def all_names_list(self, request, format=None):
         """Return a list of compute resource names keyed by resource id."""
         all_names = request.airavata_client.getAllComputeResourceNames(
@@ -799,7 +834,7 @@ class ComputeResourceViewSet(mixins.RetrieveModelMixin,
             } for host_id, host in all_names.items()
         ])
 
-    @detail_route()
+    @action(detail=True)
     def queues(self, request, compute_resource_id, format=None):
         details = request.airavata_client.getComputeResource(
             request.authz_token, compute_resource_id)
@@ -927,6 +962,7 @@ class LocalDataMovementView(APIView):
 
 
 class DataProductView(APIView):
+
     serializer_class = serializers.DataProductSerializer
 
     def get(self, request, format=None):
@@ -937,12 +973,25 @@ class DataProductView(APIView):
             data_product, context={'request': request})
         return Response(serializer.data)
 
+    def put(self, request, format=None):
+        data_product_uri = request.query_params['product-uri']
+        data_product = request.airavata_client.getDataProduct(
+            request.authz_token, data_product_uri)
+        if request.data and "fileContentText" in request.data:
+            user_storage.update_data_product_content(
+                request=request,
+                data_product=data_product,
+                fileContentText=request.data["fileContentText"])
+            return self.get(request=request, format=format)
+        else:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
 
-@login_required
+
+@api_view(http_method_names=['POST'])
 def upload_input_file(request):
     try:
         input_file = request.FILES['file']
-        data_product = data_products_helper.save_input_file_upload(
+        data_product = user_storage.save_input_file(
             request, input_file, content_type=input_file.content_type)
         serializer = serializers.DataProductSerializer(
             data_product, context={'request': request})
@@ -955,16 +1004,16 @@ def upload_input_file(request):
         return resp
 
 
-@login_required
+@api_view(http_method_names=['POST'])
 def tus_upload_finish(request):
     uploadURL = request.POST['uploadURL']
 
-    def move_input_file(file_path, file_name, file_type):
-        return data_products_helper.move_input_file_upload_from_filepath(
-            request, file_path, name=file_name, content_type=file_type)
-
+    def save_upload(file_path, file_name, file_type):
+        with open(file_path, 'rb') as uploaded_file:
+            return user_storage.save_input_file(request, uploaded_file,
+                                                name=file_name, content_type=file_type)
     try:
-        data_product = tus.move_tus_upload(uploadURL, move_input_file)
+        data_product = tus.save_tus_upload(uploadURL, save_upload)
         serializer = serializers.DataProductSerializer(
             data_product, context={'request': request})
         return JsonResponse({'uploaded': True,
@@ -973,7 +1022,8 @@ def tus_upload_finish(request):
         return exceptions.generic_json_exception_response(e, status=400)
 
 
-@login_required
+@gzip_page
+@api_view()
 def download_file(request):
     # TODO check that user has access to this file using sharing API
     data_product_uri = request.GET.get('data-product-uri', '')
@@ -984,7 +1034,7 @@ def download_file(request):
             request.authz_token, data_product_uri)
         mime_type = "application/octet-stream"  # default mime-type
         if (data_product.productMetadata and
-            'mime-type' in data_product.productMetadata):
+                'mime-type' in data_product.productMetadata):
             mime_type = data_product.productMetadata['mime-type']
         # 'mime-type' url parameter overrides
         mime_type = request.GET.get('mime-type', mime_type)
@@ -993,20 +1043,23 @@ def download_file(request):
                     .format(data_product_uri), exc_info=True)
         raise Http404("data product does not exist") from e
     try:
-        data_file = data_products_helper.open_file(request, data_product)
+        data_file = user_storage.open_file(request, data_product)
         response = FileResponse(data_file, content_type=mime_type)
-        file_name = os.path.basename(data_file.name)
+        if user_storage.is_input_file(request, data_product):
+            file_name = data_product.productName
+        else:
+            file_name = os.path.basename(data_file.name)
         if mime_type == 'application/octet-stream' or force_download:
             response['Content-Disposition'] = ('attachment; filename="{}"'
                                                .format(file_name))
         else:
-            response['Content-Disposition'] = f'filename="{file_name}"'
+            response['Content-Disposition'] = f'inline; filename="{file_name}"'
         return response
     except ObjectDoesNotExist as e:
         raise Http404(str(e)) from e
 
 
-@login_required
+@api_view(http_method_names=['DELETE'])
 def delete_file(request):
     # TODO check that user has write access to this file using sharing API
     data_product_uri = request.GET.get('data-product-uri', '')
@@ -1020,9 +1073,9 @@ def delete_file(request):
         raise Http404("data product does not exist") from e
     try:
         if (data_product.gatewayId != settings.GATEWAY_ID or
-            data_product.ownerName != request.user.username):
+                data_product.ownerName != request.user.username):
             raise PermissionDenied()
-        data_products_helper.delete(request, data_product)
+        user_storage.delete(request, data_product)
         return HttpResponse(status=204)
     except ObjectDoesNotExist as e:
         raise Http404(str(e)) from e
@@ -1070,18 +1123,18 @@ class GroupResourceProfileViewSet(APIBackedViewSet):
     def perform_update(self, serializer):
         grp = serializer.save()
         for removed_compute_resource_preference \
-            in grp._removed_compute_resource_preferences:
+                in grp._removed_compute_resource_preferences:
             self.request.airavata_client.removeGroupComputePrefs(
                 self.authz_token,
                 removed_compute_resource_preference.computeResourceId,
                 removed_compute_resource_preference.groupResourceProfileId)
         for removed_compute_resource_policy \
-            in grp._removed_compute_resource_policies:
+                in grp._removed_compute_resource_policies:
             self.request.airavata_client.removeGroupComputeResourcePolicy(
                 self.authz_token,
                 removed_compute_resource_policy.resourcePolicyId)
         for removed_batch_queue_resource_policy \
-            in grp._removed_batch_queue_resource_policies:
+                in grp._removed_batch_queue_resource_policies:
             self.request.airavata_client.removeGroupBatchQueueResourcePolicy(
                 self.authz_token,
                 removed_batch_queue_resource_policy.resourcePolicyId)
@@ -1105,7 +1158,6 @@ class SharedEntityViewSet(mixins.RetrieveModelMixin,
         # ones that can be edited
         # Load accessible users in order of permission precedence: users that
         # have WRITE permission should also have READ
-        log.info(lookup_value)
         users.update(self._load_directly_accessible_users(
             lookup_value, ResourcePermissionType.READ))
         users.update(self._load_directly_accessible_users(
@@ -1118,7 +1170,6 @@ class SharedEntityViewSet(mixins.RetrieveModelMixin,
         # or more INDIRECT cascading owners, which would the owners of the
         # ancestor entities, but getAllDirectlyAccessibleUsers does not return
         # indirectly cascading owners)
-        log.info(owner_ids)
         owner_id = list(owner_ids.keys())[0]
         # Remove owner from the users list
         del users[owner_id]
@@ -1154,8 +1205,9 @@ class SharedEntityViewSet(mixins.RetrieveModelMixin,
 
     def _load_user_profile(self, user_id):
         user_profile_client = self.request.profile_service['user_profile']
+        username = user_id[0:user_id.rindex('@')]
         return user_profile_client.getUserProfileById(self.authz_token,
-                                                      user_id,
+                                                      username,
                                                       settings.GATEWAY_ID)
 
     def _load_accessible_groups(self, entity_id, permission_type):
@@ -1244,7 +1296,7 @@ class SharedEntityViewSet(mixins.RetrieveModelMixin,
             self.authz_token, entity_id,
             {group_id: permission_type for group_id in group_ids})
 
-    @detail_route(methods=['put'])
+    @action(methods=['put'], detail=True)
     def merge(self, request, entity_id=None):
         # Validate updated sharing settings
         updated = self.get_serializer(data=request.data)
@@ -1254,9 +1306,9 @@ class SharedEntityViewSet(mixins.RetrieveModelMixin,
         existing = self.get_serializer(instance=existing_instance)
         merged_data = existing.data
         merged_data['userPermissions'] = existing.data['userPermissions'] + \
-                                         updated.initial_data['userPermissions']
+            updated.initial_data['userPermissions']
         merged_data['groupPermissions'] = existing.data['groupPermissions'] + \
-                                          updated.initial_data['groupPermissions']
+            updated.initial_data['groupPermissions']
         # Create a merged_serializer from the existing sharing settings and the
         # merged settings. This will calculate all permissions that need to be
         # granted and revoked to go from the exisitng settings to the merged
@@ -1267,7 +1319,7 @@ class SharedEntityViewSet(mixins.RetrieveModelMixin,
         self.perform_update(merged_serializer)
         return Response(merged_serializer.data)
 
-    @detail_route(methods=['get'])
+    @action(methods=['get'], detail=True)
     def all(self, request, entity_id=None):
         """Load direct plus indirectly (inherited) shared permissions."""
         users = {}
@@ -1358,7 +1410,7 @@ class CredentialSummaryViewSet(APIBackedViewSet):
     def create_password(self, request):
         if ('username' not in request.data or
             'password' not in request.data or
-            'description' not in request.data):
+                'description' not in request.data):
             raise ParseError("'username', 'password' and 'description' "
                              "are all required in request")
         username = request.data.get('username')
@@ -1380,36 +1432,7 @@ class CredentialSummaryViewSet(APIBackedViewSet):
                 self.authz_token, instance.token)
 
 
-class GatewayResourceProfileViewSet(APIBackedViewSet):
-    serializer_class = serializers.GatewayResourceProfileSerializer
-    lookup_field = 'gateway_id'
-
-    def get_list(self):
-        return self.request.airavata_client.getAllGatewayResourceProfiles(
-            self.authz_token)
-
-    def get_instance(self, lookup_value):
-        return self.request.airavata_client.getGatewayResourceProfile(
-            self.authz_token, lookup_value)
-
-    def perform_create(self, serializer):
-        gateway_resource_profile = serializer.save()
-        self.request.airavata_client.registerGatewayResourceProfile(
-            self.authz_token, gateway_resource_profile)
-
-    def perform_update(self, serializer):
-        gateway_resource_profile = serializer.save()
-        self.request.airavata_client.updateGatewayResourceProfile(
-            self.authz_token,
-            gateway_resource_profile.gatewayID,
-            gateway_resource_profile)
-
-    def perform_destroy(self, instance):
-        self.request.airavata_client.deleteGatewayResourceProfile(
-            self.authz_token, instance.gatewayID)
-
-
-class GetCurrentGatewayResourceProfile(APIView):
+class CurrentGatewayResourceProfile(APIView):
 
     def get(self, request, format=None):
         gateway_resource_profile = \
@@ -1418,6 +1441,19 @@ class GetCurrentGatewayResourceProfile(APIView):
         serializer = serializers.GatewayResourceProfileSerializer(
             gateway_resource_profile, context={'request': request})
         return Response(serializer.data)
+
+    def put(self, request, format=None):
+        serializer = serializers.GatewayResourceProfileSerializer(
+            data=request.data, context={'request': request})
+        if serializer.is_valid():
+            gateway_resource_profile = serializer.save()
+            request.airavata_client.updateGatewayResourceProfile(
+                request.authz_token,
+                settings.GATEWAY_ID,
+                gateway_resource_profile)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class StorageResourceViewSet(mixins.RetrieveModelMixin,
@@ -1429,7 +1465,7 @@ class StorageResourceViewSet(mixins.RetrieveModelMixin,
         return self.request.airavata_client.getStorageResource(
             self.authz_token, lookup_value)
 
-    @list_route()
+    @action(detail=False)
     def all_names(self, request, format=None):
         """Return a map of compute resource names keyed by resource id."""
         return Response(
@@ -1502,42 +1538,115 @@ class UserStoragePathView(APIView):
         return self._create_response(request, path)
 
     def post(self, request, path="/", format=None):
-        if not data_products_helper.dir_exists(request, path):
-            data_products_helper.create_user_dir(request, path)
+        if not user_storage.dir_exists(request, path):
+            user_storage.create_user_dir(request, path)
 
         data_product = None
         # Handle direct upload
         if 'file' in request.FILES:
             user_file = request.FILES['file']
-            data_product = data_products_helper.save(
+            data_product = user_storage.save(
                 request, path, user_file, content_type=user_file.content_type)
         # Handle a tus upload
         elif 'uploadURL' in request.POST:
             uploadURL = request.POST['uploadURL']
 
-            def move_file(file_path, file_name, file_type):
-                return data_products_helper.move_from_filepath(
-                    request, file_path, path, name=file_name,
-                    content_type=file_type)
-
-            data_product = tus.move_tus_upload(uploadURL, move_file)
+            def save_file(file_path, file_name, file_type):
+                with open(file_path, 'rb') as uploaded_file:
+                    return user_storage.save(request, path, uploaded_file,
+                                             name=file_name, content_type=file_type)
+            data_product = tus.save_tus_upload(uploadURL, save_file)
         return self._create_response(request, path, uploaded=data_product)
 
+    # Accept wither to replace file or to replace file content text.
+    def put(self, request, path="/", format=None):
+        # Replace the file if the request has a file upload.
+        if 'file' in request.FILES:
+            self.delete(request=request, path=path, format=format)
+            dir_path, file_name = os.path.split(path)
+            self.post(request=request, path=dir_path, format=format, file_name=file_name)
+        # Replace only the file content if the request body has the `fileContentText`
+        elif request.data and "fileContentText" in request.data:
+            user_storage.update_file_content(
+                request=request,
+                path=path,
+                fileContentText=request.data["fileContentText"])
+        else:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        return self._create_response(request=request, path=path)
+
     def delete(self, request, path="/", format=None):
-        data_products_helper.delete_dir(request, path)
+        if user_storage.dir_exists(request, path):
+            user_storage.delete_dir(request, path)
+        else:
+            user_storage.delete_user_file(request, path)
+
         return Response(status=204)
 
     def _create_response(self, request, path, uploaded=None):
-        directories, files = data_products_helper.listdir(request, path)
-        data = {
-            'directories': directories,
-            'files': files
-        }
-        if uploaded is not None:
-            data['uploaded'] = uploaded
-        data['parts'] = self._split_path(path)
-        serializer = self.serializer_class(data, context={'request': request})
-        return Response(serializer.data)
+        if user_storage.dir_exists(request, path):
+            directories, files = user_storage.listdir(request, path)
+            data = {
+                'isDir': True,
+                'directories': directories,
+                'files': files
+            }
+            if uploaded is not None:
+                data['uploaded'] = uploaded
+            data['parts'] = self._split_path(path)
+            serializer = self.serializer_class(
+                data, context={'request': request})
+            return Response(serializer.data)
+        else:
+            file = user_storage.get_file(request, path)
+            data = {
+                'isDir': False,
+                'directories': [],
+                'files': [file]
+            }
+            if uploaded is not None:
+                data['uploaded'] = uploaded
+            data['parts'] = self._split_path(path)
+            serializer = self.serializer_class(
+                data, context={'request': request})
+            return Response(serializer.data)
+
+    def _split_path(self, path):
+        head, tail = os.path.split(path)
+        if head != "":
+            return self._split_path(head) + [tail]
+        elif tail != "":
+            return [tail]
+        else:
+            return []
+
+
+class ExperimentStoragePathView(APIView):
+
+    serializer_class = serializers.ExperimentStoragePathSerializer
+
+    def get(self, request, experiment_id=None, path="", format=None):
+        return self._create_response(request, experiment_id, path)
+
+    def _create_response(self, request, experiment_id, path):
+        if user_storage.experiment_dir_exists(request, experiment_id, path):
+            directories, files = user_storage.list_experiment_dir(request, experiment_id, path)
+
+            def add_expid(d):
+                d['experiment_id'] = experiment_id
+                return d
+            data = {
+                'isDir': True,
+                'directories': map(add_expid, directories),
+                'files': map(add_expid, files)
+            }
+            data['parts'] = self._split_path(path)
+            serializer = self.serializer_class(
+                data, context={'request': request})
+            return Response(serializer.data)
+        else:
+            raise Http404(f"Path '{path}' does not exist for {experiment_id}")
 
     def _split_path(self, path):
         head, tail = os.path.split(path)
@@ -1625,8 +1734,7 @@ class IAMUserViewSet(mixins.RetrieveModelMixin,
             def get_results(self, limit=-1, offset=0):
                 return map(convert_user_profile,
                            iam_admin_client.get_users(offset, limit, search))
-
-        return IAMUsersResultIterator()
+        return IAMUsersResultIterator(query_params=self.request.query_params.copy())
 
     def get_instance(self, lookup_value):
         return self._convert_user_profile(
@@ -1660,7 +1768,7 @@ class IAMUserViewSet(mixins.RetrieveModelMixin,
     def perform_destroy(self, instance):
         iam_admin_client.delete_user(instance['userId'])
 
-    @detail_route(methods=['post'])
+    @action(methods=['post'], detail=True)
     def enable(self, request, user_id=None):
         iam_admin_client.enable_user(user_id)
         instance = self.get_instance(user_id)
@@ -1736,7 +1844,6 @@ class UnverifiedEmailUserViewSet(mixins.ListModelMixin,
         class UnverifiedEmailUsersResultIterator(APIResultIterator):
             def get_results(self, limit=-1, offset=0):
                 return get_users(limit, offset)
-
         return UnverifiedEmailUsersResultIterator()
 
     def get_instance(self, lookup_value):
@@ -1749,7 +1856,7 @@ class UnverifiedEmailUserViewSet(mixins.ListModelMixin,
             return users[0]
 
     def _get_unverified_email_user_profiles(
-        self, limit=-1, offset=0, username=None):
+            self, limit=-1, offset=0, username=None):
         unverified_emails = EmailVerification.objects.filter(
             verified=False).order_by('username').values('username').distinct()
         if username is not None:
@@ -1762,7 +1869,7 @@ class UnverifiedEmailUserViewSet(mixins.ListModelMixin,
             if iam_admin_client.is_user_exist(unverified_username):
                 user_profile = iam_admin_client.get_user(unverified_username)
                 if (user_profile.State == Status.CONFIRMED or
-                    user_profile.State == Status.ACTIVE):
+                        user_profile.State == Status.ACTIVE):
                     # TODO: test this
                     EmailVerification.objects.filter(
                         username=unverified_username).update(
@@ -1840,7 +1947,7 @@ class APIServerStatusCheckView(APIView):
         return Response(data)
 
 
-@login_required
+@api_view()
 def notebook_output_view(request):
     provider_id = request.GET['provider-id']
     experiment_id = request.GET['experiment-id']
@@ -1852,13 +1959,13 @@ def notebook_output_view(request):
     return HttpResponse(data['output'])
 
 
-@login_required
+@api_view()
 def html_output_view(request):
     data = _generate_output_view_data(request)
     return JsonResponse(data)
 
 
-@login_required
+@api_view()
 def image_output_view(request):
     data = _generate_output_view_data(request)
     # data should contain 'image' as a file-like object or raw bytes with the
@@ -1867,6 +1974,7 @@ def image_output_view(request):
     return JsonResponse(data)
 
 
+@api_view()
 def link_output_view(request):
     data = _generate_output_view_data(request)
     return JsonResponse(data)
@@ -1877,8 +1985,10 @@ def _generate_output_view_data(request):
     provider_id = params.pop('provider-id')[0]
     experiment_id = params.pop('experiment-id')[0]
     experiment_output_name = params.pop('experiment-output-name')[0]
+    test_mode = ('test-mode' in params and params.pop('test-mode')[0] == "true")
     return output_views.generate_data(request,
                                       provider_id,
                                       experiment_output_name,
                                       experiment_id,
+                                      test_mode=test_mode,
                                       **params.dict())

@@ -436,7 +436,8 @@ class ExperimentSerializer(
         view_name='django_airavata_api:shared-entity-detail',
         lookup_field='experimentId',
         lookup_url_kwarg='entity_id')
-    experimentInputs = serializers.ListField(
+    experimentInputs = OrderedListField(
+        order_by='inputOrder',
         child=InputDataObjectTypeSerializer(),
         allow_null=True)
     experimentOutputs = serializers.ListField(
@@ -479,6 +480,7 @@ class DataProductSerializer(
     replicaLocations = DataReplicaLocationSerializer(many=True)
     downloadURL = serializers.SerializerMethodField()
     isInputFileUpload = serializers.SerializerMethodField()
+    filesize = serializers.SerializerMethodField()
 
     def get_downloadURL(self, data_product):
         """Getter for downloadURL field."""
@@ -494,6 +496,15 @@ class DataProductSerializer(
         """Return True if this is an uploaded input file."""
         request = self.context['request']
         return data_products_helper.is_input_file_upload(request, data_product)
+
+    def get_filesize(self, data_product):
+        request = self.context['request']
+        # For backwards compatibility with older user_storage, can be eventually removed
+        if hasattr(user_storage, 'get_data_product_metadata'):
+            metadata = user_storage.get_data_product_metadata(request, data_product)
+            return metadata['size']
+        else:
+            return 0
 
 
 # TODO move this into airavata_sdk?
